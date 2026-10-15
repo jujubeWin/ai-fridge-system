@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>冰箱数据看板</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --card-bg: #ffffff;
+      --text-main: #1d1d1f;
+      --text-sub: #86868b;
+      --border: #d2d2d7;
+      --accent: #0071e3;
+      --warn: #ff3b30;
+      --warn-bg: #fff2f1;
+    }
+    * { box-sizing: border-box; }
+    
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+      min-height: 100vh;
+      padding-left: 100px; /* 给左侧悬浮菜单留出空间 */
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ====== 左侧垂直悬浮菜单 ====== */
+    .sidebar {
+      position: fixed;
+      left: 24px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px); /* 苹果毛玻璃 */
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 40px;
+      display: flex;
+      flex-direction: column; /* 垂直排列 */
+      padding: 10px 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+      z-index: 100;
+      gap: 12px;
+      width: 68px; /* 菜单条整体宽度 */
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      height: 52px;
+      border-radius: 26px;
+      color: var(--text-sub);
+      font-size: 20px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      padding: 0 16px; /* 让图标居中 */
+      white-space: nowrap;
+      width: 52px; /* 默认收起时的宽度 */
+    }
+
+    /* 文字部分：初始隐藏 */
+    .nav-item .nav-text {
+      width: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    /* 鼠标悬停时展开 */
+    .nav-item:hover {
+      width: 120px; /* 展开宽度 */
+      background: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 4px 16px rgba(0, 113, 227, 0.3);
+    }
+    .nav-item:hover .nav-text {
+      width: auto;
+      opacity: 1;
+      margin-left: 8px;
+    }
+
+    /* 激活状态（选中） */
+    .nav-item.active {
+      background: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 4px 16px rgba(0, 113, 227, 0.3);
+    }
+    /* 激活时如果是鼠标没悬停，文字保持隐藏；如果悬停，文字展开 */
+    .nav-item.active:not(:hover) .nav-text {
+      width: 0; opacity: 0; margin-left: 0;
+    }
+    .nav-item.active:hover {
+      width: 120px;
+    }
+    .nav-item.active:hover .nav-text {
+      width: auto; opacity: 1; margin-left: 8px;
+    }
+
+    /* ====== 主内容区 ====== */
+    .main-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 30px 40px;
+    }
+
+        /* 顶部标题栏容器：强制两端对齐 */
+        header {
+      display: flex;
+      justify-content: space-between; /* 左右两端强制对齐 */
+      align-items: flex-end;          /* 底部对齐 */
+      margin-bottom: 24px;
+      flex-wrap: wrap;                /* 屏幕太窄时允许换行 */
+      gap: 16px;                      /* 换行后的上下间距 */
+    }
+    
+    /* 左侧标题区，防止被挤压 */
+    .header-left {
+      flex: 1;
+      min-width: 200px;
+    }
+    
+    /* 右侧按钮区，保证它无论如何都在右边 */
+    .header-right { 
+      display: flex; 
+      align-items: center; 
+      gap: 16px; 
+      flex-shrink: 0; /* 禁止右侧内容被压缩 */
+    }
+    h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.5px; }
+    .sub { color: var(--text-sub); font-size: 13px; margin-top: 6px; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .status { font-size: 13px; color: var(--text-sub); }
+    .status.err { color: var(--warn); }
+
+    button#refreshBtn {
+      background: var(--accent); color: #fff; border: none; border-radius: 98px;
+      padding: 8px 18px; font-size: 13px; font-weight: 500; cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0, 113, 227, 0.2); transition: all 0.2s ease;
+    }
+    button#refreshBtn:hover { background: #0077ed; transform: scale(1.02); }
+
+    /* ====== 卡片网格布局 ====== */
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .card {
+      background: var(--card-bg); border-radius: 20px; padding: 20px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02);
+    }
+    .card h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; letter-spacing: -0.2px; }
+    
+    /* 图表高度缩小 */
+    .chart { width: 100%; height: 240px !important; }
+
+    /* 表格样式 */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 12px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-sub); font-weight: 500; font-size: 13px; }
+    tr:last-child td { border-bottom: none; }
+    tr.warn { background: var(--warn-bg); }
+    tr.warn td { color: var(--warn); font-weight: 500; }
+    .empty { color: var(--text-sub); padding: 40px 0; text-align: center; font-size: 14px; }
+
+    /* 操作按钮 */
+    .action-btn {
+      background: #f5f5f7; color: #1d1d1f; border: none; border-radius: 6px;
+      padding: 6px 10px; font-size: 12px; cursor: pointer; transition: all 0.2s;
+    }
+    .action-btn:hover { background: #e5e5ea; }
+    .action-btn.danger { color: var(--warn); }
+    
+    /* 表单样式 */
+    .form-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+    .form-group { flex: 1; min-width: 120px; }
+    .form-group label { font-size: 12px; color: var(--text-sub); display: block; margin-bottom: 4px; }
+    .form-group input, .form-group select {
+      width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--border);
+      font-family: inherit; font-size: 14px; outline: none; transition: border-color 0.2s;
+    }
+    .form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+    .btn-submit {
+      padding: 10px 24px; border-radius: 10px; background: var(--accent); color: #fff;
+      border: none; font-weight: 500; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-submit:hover { background: #0077ed; }
+
+    /* ====== 手机端适配（淘宝风格底部导航） ====== */
+    @media (max-width: 768px) {
+      body { padding-left: 0; padding-bottom: 80px; }
+      .sidebar {
+        top: auto;
+        bottom: 0;
+        left: 0;
+        transform: none;
+        width: 100%;
+        flex-direction: row;
+        justify-content: space-around;
+        border-radius: 20px 20px 0 0;
+        padding: 8px 0;
+        gap: 0;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
+        background: #ffffff;
+      }
+      .nav-item {
+        flex-direction: column; /* 图标在上，文字在下 */
+        width: auto;
+        height: auto;
+        padding: 6px 16px;
+        gap: 4px;
+        border-radius: 12px;
+      }
+      .nav-item .nav-text {
+        width: auto !important;
+        opacity: 1 !important;
+        margin-left: 0 !important;
+      }
+      .nav-item.active {
+        background: transparent;
+        color: var(--accent);
+        box-shadow: none;
+      }
+      .nav-item:hover, .nav-item.active:hover {
+        width: auto;
+        background: transparent;
+        color: var(--accent);
+        box-shadow: none;
+      }
+      .main-content { padding: 20px 16px; }
+      .grid { grid-template-columns: 1fr; }
+      .card { grid-column: span 1 !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 左侧悬浮菜单 -->
+  <nav class="sidebar">
+    <!-- 📦 库存管理移到第一位，并加上 active -->
+    <div class="nav-item active" id="nav-inventory" onclick="switchTab('inventory')">
+      <span class="nav-icon">📦</span><span class="nav-text">库存管理</span>
+    </div>
+    <!-- 📊 数据看板移到第二位，移除 active -->
+    <div class="nav-item" id="nav-dashboard" onclick="switchTab('dashboard')">
+      <span class="nav-icon">📊</span><span class="nav-text">数据看板</span>
+    </div>
+    <div class="nav-item" id="nav-ai" onclick="switchTab('ai')">
+      <span class="nav-icon">✨</span><span class="nav-text">AI 菜谱</span>
+    </div>
+    <div class="nav-item" id="nav-shopping" onclick="switchTab('shopping')">
+      <span class="nav-icon">🛒</span><span class="nav-text">采购建议</span>
+    </div>
+  </nav>
+
+  <!-- 主内容区 -->
+  <main class="main-content">
+    <header>
+      <!-- 左边：标题区 -->
+      <div class="header-left">
+        <h1 id="pageTitle">数据看板</h1>
+        <div class="sub" id="pageSub">当前库存 · 消耗趋势 · 浪费率 · 临期预警</div>
+      </div>
+      <!-- 右边：状态与按钮区 -->
+      <div class="header-right">
+        <span id="loadStatus" class="status">正在加载…</span>
+        <button id="refreshBtn" type="button">刷新数据</button>
+      </div>
+    </header>
+
+    <!-- 页面：数据看板 -->
+    <div id="page-dashboard" class="grid" style="display: none;">
+      <section class="card">
+        <h2>当前库存分类分布</h2>
+        <div id="treemapChart" class="chart"></div>
+      </section>
+      <section class="card">
+        <h2>过去一段时间食材消耗趋势</h2>
+        <div id="areaChart" class="chart"></div>
+      </section>
+      <section class="card">
+        <h2>30天食材浪费记录</h2>
+        <div id="scatterChart" class="chart"></div>
+      </section>
+      <section class="card">
+        <h2>临期食材预警(3 天内)</h2>
+        <div id="alertTable"></div>
+      </section>
+    </div>
+
+    <!-- 页面：库存管理 -->
+    <div id="page-inventory" class="grid">
+            <!-- 表单卡片：入库/出库切换 -->
+            <section class="card" style="grid-column: span 2;">
+              <!-- 顶部标签切换栏 -->
+              <div style="display: flex; gap: 24px; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px;">
+                <h2 id="tabIn" onclick="switchFormTab('in')" style="cursor: pointer; color: var(--accent); margin-bottom: 0;">➕ 新增食材入库</h2>
+                <h2 id="tabOut" onclick="switchFormTab('out')" style="cursor: pointer; color: var(--text-sub); margin-bottom: 0;">➖ 食材出库消耗</h2>
+              </div>
+              
+              <!-- 入库表单 -->
+              <form id="inventoryForm" class="form-row">
+                <div class="form-group"><label>名称</label><input type="text" id="inName" required></div>
+                <div class="form-group"><label>分类</label>
+                  <select id="inFenlei" required>
+                    <option value="蔬菜">蔬菜</option>
+                    <option value="肉类">肉类</option>
+                    <option value="乳制品">乳制品</option>
+                    <option value="菌菇">菌菇</option>
+                    <option value="调料">调料</option>
+                    <option value="其他">其他</option>
+                  </select>
+                </div>
+                <div class="form-group"><label>数量</label><input type="number" id="inShuliang" required step="0.1"></div>
+                <div class="form-group"><label>保质期至</label><input type="date" id="inExpire" required></div>
+                <div class="form-group"><label>位置</label><input type="text" id="inLocation" value="fridge"></div>
+                <button type="submit" class="btn-submit">确认入库</button>
+              </form>
+      
+              <!-- 出库表单（默认隐藏） -->
+              <form id="outboundForm" class="form-row" style="display: none;">
+                <div class="form-group">
+                  <label>选择食材</label>
+                  <select id="outName" required>
+                    <option value="">请选择...</option>
+                  </select>
+                </div>
+                <div class="form-group"><label>出库数量</label><input type="number" id="outShuliang" required step="0.1" min="0.1"></div>
+                <div class="form-group">
+                  <label>出库原因</label>
+                  <select id="outReason" required>
+                    <option value="consume">做饭消耗</option>
+                    <option value="expired">过期丢弃</option>
+                    <option value="discard">自主丢弃</option>
+                  </select>
+                </div>
+                <button type="submit" class="btn-submit" style="background: #ff9500;">确认出库</button>
+              </form>
+            </section>
+      <section class="card" style="grid-column: span 2;">
+        <div style="margin-bottom: 16px;">
+          <h2>📦 当前库存列表</h2>
+        </div>
+        <div id="inventoryTable" style="overflow-x: auto;"></div>
+      </section>
+    </div>
+
+    <!-- 页面：AI 菜谱 -->
+    <div id="page-ai" style="display: none;">
+      <div class="card" style="text-align: center; padding: 40px;">
+        <h2 style="font-size: 24px; margin-bottom: 12px;">✨ 智能菜谱推荐</h2>
+        <p style="color: var(--text-sub); margin-bottom: 24px;">AI 将根据你冰箱里的现有食材，为你量身定制家常菜谱。</p>
+        <!-- AI 个性化输入区 -->
+        <div style="display: flex; gap: 16px; max-width: 600px; margin: 0 auto 24px; text-align: left; flex-wrap: wrap;">
+          <div style="flex: 1; min-width: 240px;">
+            <label style="font-size: 12px; color: var(--text-sub);">🚫 忌口/不吃</label>
+            <input type="text" id="aiAvoidInput" style="width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--border); margin-top: 4px; outline: none;" placeholder="例如：香菜、海鲜过敏、不能吃辣">
+          </div>
+          <div style="flex: 1; min-width: 240px;">
+            <label style="font-size: 12px; color: var(--text-sub);">🤤 特别想吃</label>
+            <input type="text" id="aiPreferInput" style="width: 100%; padding: 10px; border-radius: 10px; border: 1px solid var(--border); margin-top: 4px; outline: none;" placeholder="例如：川菜、清淡的汤、甜口">
+          </div>
+        </div>
+        <button id="generateRecipeBtn" class="btn-submit" style="padding: 12px 32px; font-size: 16px; border-radius: 98px;">开始生成菜谱 🍳</button>
+        <div id="aiLoading" style="display: none; margin-top: 20px; color: var(--text-sub);">AI 正在思考中，请稍候...</div>
+      </div>
+      
+      <!-- 菜谱展示区 -->
+      <div id="recipeResults" class="grid" style="margin-top: 20px;"></div>
+    </div>
+
+    <!-- 页面：智能采购建议 -->
+    <div id="page-shopping" style="display: none;">
+      <div class="card" style="text-align: center; padding: 40px;">
+        <h2 style="font-size: 24px; margin-bottom: 12px;">🛒 智能采购建议</h2>
+        <p style="color: var(--text-sub); margin-bottom: 24px;">AI 将根据你冰箱的现有库存，为你推荐需要补充的食材，并告诉你买回来能做什么菜。</p>
+        <button id="generateShoppingBtn" class="btn-submit" style="padding: 12px 32px; font-size: 16px; border-radius: 98px;">开始生成采购单 🛒</button>
+        <div id="shoppingLoading" style="display: none; margin-top: 20px; color: var(--text-sub);">AI 正在规划采购清单，请稍候...</div>
+      </div>
+      
+      <!-- 采购建议展示区 -->
+      <div id="shoppingResults" class="grid" style="margin-top: 20px;"></div>
+    </div>
+
+  </main>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
