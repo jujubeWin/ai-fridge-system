@@ -119,39 +119,53 @@ def get_ai_recipe():
     ]
     """
 
+    # 针对大模型输出格式不稳定的“幻觉”边界，通过后端强校验与重试机制保障前端渲染
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "glm-4-flash",  # 换成这个最稳定的经典免费模型
+        "model": "glm-4-flash",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7
     }
+    payload_json = json.dumps(payload, ensure_ascii=False).encode('utf-8')
 
-    try:
-        # 👇 关键修复：手动转成 UTF-8 编码的 JSON 字符串，用 data 发送，避免 Windows 环境下的 latin-1 编码错误
-        payload_json = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        response = requests.post(url, headers=headers, data=payload_json, timeout=(10, 120))
-        res_data = response.json()
-        
-        if "choices" not in res_data:
-            return jsonify({"ok": False, "error": f"AI 接口返回异常: {res_data.get('error', {}).get('message', '未知错误')}"}), 500
+    # 👇 核心改造：加入最多 3 次的自动重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, data=payload_json, timeout=(10, 60))
+            res_data = response.json()
             
-        ai_text = res_data["choices"][0]["message"]["content"]
-        ai_text = ai_text.replace("```json", "").replace("```", "").strip()
-        
-        recipes = json.loads(ai_text)
-        return jsonify({"ok": True, "data": recipes})
+            if "choices" not in res_data:
+                continue # 如果大模型没返回正常结果，直接进入下一次循环重试
+                
+            ai_text = res_data["choices"][0]["message"]["content"]
+            
+            # 格式清洗：去掉可能包裹的 Markdown 标记
+            ai_text = ai_text.replace("```json", "").replace("```", "").strip()
+            
+            # 强校验：尝试解析 JSON
+            recipes = json.loads(ai_text)
+            
+            # 如果解析成功，直接返回，结束重试
+            return jsonify({"ok": True, "data": recipes})
 
-    except json.JSONDecodeError:
-        return jsonify({"ok": False, "error": "AI 返回格式混乱，请重试"}), 500
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"请求失败: {str(e)}"}), 500
+        except json.JSONDecodeError:
+            # 如果解析失败，打印日志，并继续循环重试
+            print(f"第 {attempt + 1} 次解析 AI 输出失败，触发重试...")
+            continue
+        except Exception as e:
+            # 如果是网络等其他错误
+            return jsonify({"ok": False, "error": f"请求失败: {str(e)}"}), 500
+
+    # 如果循环了 3 次都失败
+    return jsonify({"ok": False, "error": "AI 连续 3 次输出格式异常，请稍后再试"}), 500
 # ==========================================================
 
-# ================== 新增：AI 智能采购建议接口 ==================
+# ================== AI 智能采购建议接口（已加重试机制） ==================
 @app.get("/api/ai/shopping")
 def get_ai_shopping():
     api_key = config.ZHIPU_API_KEY
@@ -166,7 +180,6 @@ def get_ai_shopping():
     if not items:
         return jsonify({"ok": False, "error": "冰箱里暂时没有食材，先去入库吧！"}), 400
 
-    # 整理现有食材清单
     food_list = "、".join([f"{item.get('name')}({item.get('shuliang')}份, {item.get('fenlei')})" for item in items])
 
     prompt = f"""
@@ -179,7 +192,7 @@ def get_ai_shopping():
     [
       {{
         "name": "推荐购买的食材名",
-        "reason": "推荐购买的理由（结合现有食材情况，比如营养搭配、缺少调料等）",
+        "reason": "推荐购买的理由（结合现有食材情况）",
         "recipes": ["购买后搭配现有食材可以做成的菜名1", "菜名2"]
       }}
     ]
@@ -195,26 +208,38 @@ def get_ai_shopping():
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7
     }
+    payload_json = json.dumps(payload, ensure_ascii=False).encode('utf-8')
 
-    try:
-        payload_json = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        response = requests.post(url, headers=headers, data=payload_json, timeout=(10, 120))
-        res_data = response.json()
-        
-        if "choices" not in res_data:
-            return jsonify({"ok": False, "error": f"AI 接口返回异常: {res_data.get('error', {}).get('message', '未知错误')}"}), 500
+    # 👇 核心改造：加入最多 3 次的自动重试机制
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, data=payload_json, timeout=(10, 60))
+            res_data = response.json()
             
-        ai_text = res_data["choices"][0]["message"]["content"]
-        ai_text = ai_text.replace("```json", "").replace("```", "").strip()
-        
-        shopping_list = json.loads(ai_text)
-        return jsonify({"ok": True, "data": shopping_list})
+            if "choices" not in res_data:
+                continue # 大模型没返回正常结果，触发重试
+                
+            ai_text = res_data["choices"][0]["message"]["content"]
+            
+            # 格式清洗
+            ai_text = ai_text.replace("```json", "").replace("```", "").strip()
+            
+            # 强校验：注意这里的变量名是 shopping_list
+            shopping_list = json.loads(ai_text)
+            
+            # 解析成功，直接返回
+            return jsonify({"ok": True, "data": shopping_list})
 
-    except json.JSONDecodeError:
-        return jsonify({"ok": False, "error": "AI 返回格式混乱，请重试"}), 500
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"请求失败: {str(e)}"}), 500
-# ==========================================================
+        except json.JSONDecodeError:
+            print(f"采购接口第 {attempt + 1} 次解析 AI 输出失败，触发重试...")
+            continue
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"请求失败: {str(e)}"}), 500
+
+    # 3 次全失败
+    return jsonify({"ok": False, "error": "AI 连续 3 次输出格式异常，请稍后再试"}), 500
+# =========================================================================
 
 
 if __name__ == "__main__":
